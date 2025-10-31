@@ -1,0 +1,490 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+    getAuth, 
+    signInAnonymously, 
+    signInWithCustomToken, 
+    onAuthStateChanged,
+    setPersistence,
+    browserLocalPersistence
+} from 'firebase/auth';
+import { 
+    getFirestore, 
+    doc, 
+    setDoc, 
+    getDoc, 
+    onSnapshot 
+} from 'firebase/firestore';
+
+// --- Global Variables (Provided by Canvas Environment) ---
+// These are assumed to be defined globally in the execution environment
+const firebaseConfig = typeof _firebase_config !== 'undefined' ? JSON.parse(_firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'eco-reward-default';
+// --- End Global Variables ---
+
+// --- Smart Bin Reward Mapping ---
+const SMART_BIN_REWARDS = {
+    'BIN-PLASTIC': 10,
+    'BIN-PAPER': 10,
+    'BIN-GLASS': 10,
+    'BIN-METAL': 10,
+    'BIN-COMPOST': 8,
+    'BIN-TRASH': 1, // Minimal points for correctly using the general trash bin
+};
+
+// --- Reward Catalog ---
+const REWARD_CATALOG = [
+    { id: 1, name: '5% Off Eco-Store Voucher', cost: 50, description: 'Save on sustainable products.' },
+    { id: 2, name: 'Free Reusable Tote Bag', cost: 100, description: 'Carry groceries in style.' },
+    { id: 3, name: '$10 Donation to Environmental Charity', cost: 250, description: 'Fund tree planting efforts.' },
+    { id: 4, name: 'Coupon: Free Coffee Refill', cost: 30, description: 'Bring your own mug for a free refill.' },
+];
+
+// --- App Component ---
+const App = () => {
+    const [db, setDb] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [userPoints, setUserPoints] = useState(0);
+    const [userHistory, setUserHistory] = useState([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [status, setStatus] = useState('Tap "Scan QR Code" to open your camera and earn points.');
+    const [showModal, setShowModal] = useState(null); 
+    
+    // STATES for camera/image input
+    const [imageData, setImageData] = useState(null); 
+    const [fileInputKey, setFileInputKey] = useState(Date.now());
+
+    // --- Firebase Initialization and Auth ---
+    useEffect(() => {
+        if (Object.keys(firebaseConfig).length === 0) {
+            setStatus('Firebase configuration is missing.');
+            return;
+        }
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            const firestore = getFirestore(app);
+            const firebaseAuth = getAuth(app);
+            
+            setDb(firestore);
+
+            setPersistence(firebaseAuth, browserLocalPersistence);
+
+            const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+                let currentUserId = null;
+                if (user) {
+                    currentUserId = user.uid;
+                } else if (initialAuthToken) {
+                    try {
+                        const credentials = await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                        currentUserId = credentials.user.uid;
+                    } catch (error) {
+                        console.error("Custom token sign-in failed, falling back to anonymous:", error);
+                        const credentials = await signInAnonymously(firebaseAuth);
+                        currentUserId = credentials.user.uid;
+                    }
+                } else {
+                    const credentials = await signInAnonymously(firebaseAuth);
+                    currentUserId = credentials.user.uid;
+                }
+                
+                setUserId(currentUserId);
+            });
+            
+            return () => unsubscribe();
+        } catch (error) {
+            console.error("Firebase Initialization Error:", error);
+            setStatus(Error initializing app: ${error.message});
+        }
+    }, []);
+
+    // --- Firestore Listener for User Points and History ---
+    useEffect(() => {
+        if (db && userId) {
+            const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'points');
+            
+            getDoc(userDocRef).then(docSnap => {
+                if (!docSnap.exists()) {
+                    setDoc(userDocRef, { value: 0, lastUpdated: new Date(), history: [] }, { merge: true });
+                }
+            }).catch(e => console.error("Error checking initial doc:", e));
+            
+            const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    setUserPoints(data.value || 0);
+                    
+                    const historyData = Array.isArray(data.history) ? data.history : [];
+                    setUserHistory(historyData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+                }
+            }, (error) => {
+                console.error("Firestore Snapshot Error:", error);
+            });
+
+            return () => unsubscribe();
+        }
+    }, [db, userId]);
+
+    // --- Event Handler for Camera Capture (Simulated Scan & Reward) ---
+    const handleFileChange = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        setIsLoading(true);
+        setStatus('QR Code captured. Processing reward...');
+        setImageData(null); // Clear previous image for cleaner transition
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const base64 = e.target.result.split(',')[1];
+            setImageData(base64);
+            
+            // --- Simulated Reward Logic (Instant Reward) ---
+            // In a real app, a library would decode the image to get the actual code.
+            // Here, we simulate a successful scan of a recycling bin.
+            const mockRewardCode = 'BIN-PLASTIC'; 
+            
+            try {
+                const pointsEarned = SMART_BIN_REWARDS[mockRewardCode];
+                
+                await updatePoints(pointsEarned, mockRewardCode, 'SCAN');
+
+                setStatus(Success! Scan Confirmed. Earned +${pointsEarned} points. Keep up the great work!);
+                setImageData(null); // Clear image proof after successful transaction
+                setFileInputKey(Date.now()); // Reset file input
+            } catch (error) {
+                console.error("Scan/Update failed:", error);
+                setStatus(An error occurred during transaction. Error: ${error.message});
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        reader.readAsDataURL(file);
+    };
+
+    // --- Redemption Handlers (Unchanged) ---
+    const handleRedeem = (reward) => {
+        if (!db || !userId) {
+            setStatus('App is not fully loaded. Cannot redeem.');
+            return;
+        }
+
+        if (userPoints < reward.cost) {
+            setShowModal({
+                title: 'Insufficient Points',
+                message: You need ${reward.cost} points to redeem "${reward.name}", but you only have ${userPoints}. Keep up the recycling!,
+                type: 'error',
+                action: null
+            });
+            return;
+        }
+        
+        setShowModal({
+            title: Redeem "${reward.name}"?,
+            message: This will cost ${reward.cost} points. Are you sure you want to proceed?,
+            type: 'confirm',
+            action: () => processRedemption(reward)
+        });
+    };
+
+    const processRedemption = async (reward) => {
+        setShowModal(null); 
+        setIsLoading(true);
+        setStatus(Redeeming "${reward.name}"...);
+
+        try {
+            const pointsSpent = -reward.cost; 
+            await updatePoints(pointsSpent, Redeemed: ${reward.name}, 'REDEEM');
+
+            const redemptionCode = ECO-${Math.random().toString(36).substring(2, 10).toUpperCase()};
+
+            setShowModal({
+                title: 'Success!',
+                message: You successfully redeemed "${reward.name}". Your redemption code is: ${redemptionCode}. Your points have been updated!,
+                type: 'success',
+                action: null
+            });
+            setStatus(Redemption successful! ${reward.cost} points deducted.);
+
+        } catch (error) {
+            console.error("Redemption failed:", error);
+            setShowModal({
+                title: 'Redemption Failed',
+                message: An error occurred while updating your points. Please try again.,
+                type: 'error',
+                action: null
+            });
+            setStatus(Redemption failed. Error: ${error.message});
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Firestore update function - handles both earning and spending points
+    const updatePoints = async (pointChange, category, type) => {
+        const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'data', 'points');
+        const docSnap = await getDoc(userDocRef);
+        
+        const data = docSnap.exists() ? docSnap.data() : { value: 0, history: [] };
+        let currentPoints = data.value || 0;
+        let currentHistory = Array.isArray(data.history) ? data.history : [];
+
+        const newPoints = currentPoints + pointChange;
+        
+        if (newPoints < 0) {
+             throw new Error("Attempted to spend more points than available.");
+        }
+
+        const newTransaction = {
+            timestamp: new Date().toISOString(),
+            itemCategory: category,
+            points: pointChange,
+            type: type // SCAN or REDEEM
+        };
+        
+        const updatedHistory = [newTransaction, ...currentHistory];
+
+        await setDoc(userDocRef, {
+            value: newPoints,
+            lastUpdated: new Date(),
+            history: updatedHistory
+        }, { merge: true });
+    };
+
+    // Helper to format timestamp
+    const formatTimestamp = (isoString) => {
+        const date = new Date(isoString);
+        return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    };
+
+    // Helper to get text color for history
+    const getPointColor = (points) => {
+        if (points > 0) return 'text-green-600';
+        if (points < 0) return 'text-red-500';
+        return 'text-gray-500';
+    };
+
+    const imagePreviewUrl = imageData ? data:image/png;base64,${imageData} : null;
+
+
+    // --- UI Rendering ---
+
+    if (!userId) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-50">
+                <div className="text-center p-8 bg-white rounded-xl shadow-lg">
+                    <p className="text-lg font-semibold text-indigo-600">Loading EcoReward System...</p>
+                    <p className="text-sm text-gray-500 mt-2">Authenticating user and connecting to database.</p>
+                </div>
+            </div>
+        );
+    }
+    
+    return (
+        <div className="min-h-screen bg-gray-100 flex flex-col items-center p-4 sm:p-8 font-['Inter']">
+            <script src="https://cdn.tailwindcss.com"></script>
+            <style>
+                {`
+                    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+                    .font-inter { font-family: 'Inter', sans-serif; }
+                `}
+            </style>
+
+            <header className="w-full max-w-6xl text-center mb-8">
+                <h1 className="text-4xl font-extrabold text-green-700 tracking-tight">
+                    EcoReward App
+                </h1>
+                <p className="text-gray-500 mt-2">
+                    Scan the Smart Bin QR code to earn rewards! User ID: <span className="font-mono text-xs bg-gray-200 px-2 py-0.5 rounded">{userId}</span>
+                </p>
+            </header>
+
+            {/* Main Content Grid: Scan | Rewards | History */}
+            <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                {/* Column 1: Scan & Earn Panel (Simplified Camera Integration) */}
+                <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg h-fit">
+                    <div className="flex justify-between items-center mb-4 border-b pb-2">
+                        <h2 className="text-2xl font-semibold text-gray-700">1. Instant Scan & Earn</h2>
+                        <div className="bg-green-100 text-green-700 font-bold px-3 py-1 rounded-full">
+                            {userPoints} Pts
+                        </div>
+                    </div>
+                    
+                    {/* Camera Capture Button */}
+                    <label 
+                        htmlFor="qr-capture-input" 
+                        className={`block w-full py-3 text-center rounded-xl font-bold text-white shadow-lg transition duration-300 cursor-pointer mb-4 ${
+                            isLoading 
+                            ? 'bg-gray-400 cursor-not-allowed' 
+                            : 'bg-green-600 hover:bg-green-700 hover:shadow-xl'
+                        }`}
+                    >
+                        {isLoading ? (
+                            <span className="flex items-center justify-center">
+                                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Processing Scan...
+                            </span>
+                        ) : 'Tap to Scan QR Code (Opens Camera)'}
+                    </label>
+                    <input
+                        id="qr-capture-input"
+                        key={fileInputKey}
+                        type="file"
+                        accept="image/*"
+                        capture="environment" // Forces device to open rear camera
+                        onChange={handleFileChange}
+                        className="hidden" // Keep the input hidden
+                        disabled={isLoading}
+                    />
+
+                    {/* Image Preview */}
+                    <div className="p-4 border border-gray-200 rounded-lg min-h-[150px] flex flex-col items-center justify-center bg-gray-50">
+                        {imagePreviewUrl ? (
+                            <img 
+                                src={imagePreviewUrl} 
+                                alt="QR Code Capture Preview" 
+                                className="max-h-48 max-w-full object-contain rounded-lg shadow-md"
+                            />
+                        ) : (
+                            <div className="text-center text-gray-400 p-4">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-10 h-10 mx-auto mb-1">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM16.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 16.5 9.375v-4.5Z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM16.5 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5Z" />
+                                </svg>
+                                <p className="text-sm">Captured Image Proof</p>
+                            </div>
+                        )}
+                    </div>
+                    
+                    {/* Status Message */}
+                    <p className={`mt-4 p-3 rounded-lg text-sm font-medium ${
+                        isLoading ? 'bg-indigo-100 text-indigo-700' : 
+                        status.includes('Success') ? 'bg-green-100 text-green-700' :
+                        status.includes('Error') ? 'bg-red-100 text-red-700' :
+                        'bg-gray-100 text-gray-600'
+                    }`}>
+                        *Status:* {status}
+                    </p>
+                </div>
+
+                {/* Column 2: Rewards Center (Unchanged) */}
+                <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow-lg">
+                    <h2 className="text-2xl font-semibold text-gray-700 mb-4 border-b pb-2">2. Rewards Center</h2>
+                    <div className="space-y-4 max-h-[500px] overflow-y-auto">
+                        {REWARD_CATALOG.map((reward) => {
+                            const canRedeem = userPoints >= reward.cost;
+                            return (
+                                <div 
+                                    key={reward.id} 
+                                    className={`p-4 rounded-lg shadow transition duration-200 ${
+                                        canRedeem ? 'bg-indigo-50 border-indigo-200 hover:shadow-md' : 'bg-gray-100 border-gray-300 opacity-60'
+                                    } border`}
+                                >
+                                    <h4 className="font-bold text-lg text-indigo-800">{reward.name}</h4>
+                                    <p className="text-sm text-gray-600 mb-2">{reward.description}</p>
+                                    <div className="flex justify-between items-center mt-2">
+                                        <div className="flex items-center text-indigo-600 font-semibold">
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5 mr-1 text-yellow-500">
+                                              <path fillRule="evenodd" d="M10.868 2.884c.31-.763 1.428-.763 1.738 0l.487 1.2a1.25 1.25 0 0 0 .972.766l1.32.185c.82.114 1.144 1.09.56 1.768l-.946 1.127a1.25 1.25 0 0 0-.395 1.098l.192 1.319c.12.822-.72 1.442-1.464 1.098l-1.128-.564a1.25 1.25 0 0 0-1.285 0l-1.128.564c-.744.344-1.584-.276-1.464-1.098l.192-1.32a1.25 1.25 0 0 0-.395-1.097l-.946-1.127c-.584-.678-.26-1.654.56-1.768l1.32-.185a1.25 1.25 0 0 0 .972-.766l.488-1.2Z" clipRule="evenodd" />
+                                            </svg>
+                                            <span className="text-2xl">{reward.cost}</span>
+                                        </div>
+                                        <button
+                                            onClick={() => handleRedeem(reward)}
+                                            disabled={!canRedeem || isLoading}
+                                            className={`px-4 py-2 text-sm font-semibold rounded-full transition duration-150 ${
+                                                canRedeem 
+                                                ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md' 
+                                                : 'bg-gray-300 text-gray-700 cursor-not-allowed'
+                                            }`}
+                                        >
+                                            {canRedeem ? 'Redeem' : Need ${reward.cost - userPoints} more}
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Column 3: Activity History (Unchanged) */}
+                <div className="lg:col-span-1 p-6 bg-white rounded-xl shadow-lg">
+                    <h2 className="text-2xl font-semibold text-gray-700 mb-4 border-b pb-2">3. Activity History</h2>
+                    <div className="space-y-3 max-h-[500px] overflow-y-auto">
+                        {userHistory.length === 0 ? (
+                            <p className="text-gray-500 text-center py-4">No activities recorded yet. Start scanning!</p>
+                        ) : (
+                            userHistory.slice(0, 10).map((item, index) => (
+                                <div key={index} className="flex justify-between items-center p-3 border-l-4 border-green-500 bg-gray-50 rounded-lg">
+                                    <div className="flex flex-col">
+                                        <p className="font-semibold capitalize text-gray-700">
+                                            {item.type === 'REDEEM' ? 'Redemption' : Scan: ${item.itemCategory}}
+                                        </p>
+                                        <p className="text-xs text-gray-400">
+                                            {item.type === 'REDEEM' ? Reward: ${item.itemCategory.replace('Redeemed: ', '')} : Time: ${formatTimestamp(item.timestamp)}}
+                                        </p>
+                                    </div>
+                                    <span className={font-bold text-lg ${getPointColor(item.points)}}>
+                                        {item.points > 0 ? +${item.points} : item.points}
+                                    </span>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+
+            </div>
+            
+            {/* Modal Component for Alerts/Confirmation */}
+            {showModal && (
+                <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-center">
+                        <h3 className={text-xl font-bold mb-3 ${showModal.type === 'error' ? 'text-red-600' : showModal.type === 'success' ? 'text-green-600' : 'text-indigo-600'}}>
+                            {showModal.title}
+                        </h3>
+                        <p className="text-gray-600 mb-6 whitespace-pre-wrap">{showModal.message}</p>
+                        
+                        {showModal.type === 'confirm' && (
+                            <div className="flex justify-center space-x-4">
+                                <button
+                                    onClick={showModal.action}
+                                    className="px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition"
+                                >
+                                    Yes, Redeem
+                                </button>
+                                <button
+                                    onClick={() => setShowModal(null)}
+                                    className="px-4 py-2 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        )}
+                        {showModal.type !== 'confirm' && (
+                            <button
+                                onClick={() => setShowModal(null)}
+                                className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition"
+                            >
+                                Got It
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Note on Technology */}
+            <footer className="w-full max-w-6xl mt-8 text-center text-xs text-gray-400">
+                <p>
+                    *This application uses Firebase Firestore for persistent user data and reward tracking.
+                </p>
+            </footer>
+        </div>
+    );
+};
+
+export default App;
