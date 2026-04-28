@@ -63,4 +63,4 @@ The application leverages advanced state management to simulate hardware endpoin
 ## 🌐 Deployment
 The application is pre-configured for instant deployment on Vercel. 
 - Build step: `npm run build` (generates static assets via Vite)
-- Live Demo: [https://rewardsapp-zeta.vercel.app](https://rewardsapp-zeta.vercel.app)
+- Live Demo: [https://rewardsapp-main.vercel.app/](https://rewardsapp-main.vercel.app/)
