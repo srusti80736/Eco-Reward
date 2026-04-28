@@ -48,7 +48,7 @@ The application leverages advanced state management to simulate hardware endpoin
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/bhavanihbvb/rewardsapp.git
+   git clone https://github.com/srusti80736/Eco-Reward.git
    ```
 2. Install dependencies:
    ```bash
